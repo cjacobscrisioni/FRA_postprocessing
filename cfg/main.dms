@@ -1,7 +1,7 @@
 container FRA_postprocessing {
 		
 	parameter<uint32> init_code:= 500;
-	parameter<string> suffix:= '_x1';
+	parameter<string> suffix:= '_x0';
 	
 	parameter<float64> mainbody_minarea:= 2d;
 	parameter<uint32>  mainbody_minpop:= 1000;
@@ -36,6 +36,15 @@ container FRA_postprocessing {
 		attribute<string> Remaining_str:= substr(fua_id, 2, strlen(fua_id));
 		attribute<uint32> Number:= substr(fua_id, 2, strlen(fua_id)-3)[uint32];
 		attribute<LambertEA> poly_from_grid (poly):= geos_union_polygon(popgrid_unit/geometry_poly, popgrid_unit/fua_rel);
+	}
+	unit<uint32> LAUs: storagename = "%projdir%/data/LAU_RG_01M_2021_3035.gpkg", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA" {
+		attribute<LambertEA> centroid:= centroid_or_mid(geometry);
+		attribute<FUAs>		 FUA_rel:= point_in_polygon(centroid, FUAs/Geometry);
+		attribute<bool>		 inFUA:= isdefined(FUA_rel);
+		//attribute<string> Country:= substr(fua_id, 0, 2);
+		//attribute<string> Remaining_str:= substr(fua_id, 2, strlen(fua_id));
+		//attribute<uint32> Number:= substr(fua_id, 2, strlen(fua_id)-3)[uint32];
+		//attribute<LambertEA> poly_from_grid (poly):= geos_union_polygon(popgrid_unit/geometry_poly, popgrid_unit/fua_rel);
 	}
 	unit<uint32> Countries:= unique(FRAs/MS) {attribute<string> Label:= Values;}
 	
@@ -106,6 +115,7 @@ container FRA_postprocessing {
 		}
 		
 		container cleanup_per_country:= for_each_ne(Countries/Values, 'T_cleanup_per_country('+quote(Countries/Values)+')');
+		container create_FRAUs_from_FRAGs:= for_each_ne(Countries/Values, 'T_Create_FRAUs('+quote(Countries/Values)+','+quote(propvalue(export_curation_1/curated_step1_export, 'storagename'))+')');
 		
 		container export_curation_1 {
 			unit<uint32> curated_step1_export:= ='union_unit('+asItemList('cleanup_per_country/'+Countries/Values+'/Country_ff_main')+')', storagename = "= '%projdir%/process/curation1/fras_fuas_'+suffix+'.shp'", storagetype = "gdalwrite.vect" {
@@ -121,6 +131,25 @@ container FRA_postprocessing {
 					,  StorageType = "str";
 			}
 			parameter<bool> store_curation:= True, explicitsuppliers="curated_step1_export;curation_step1_mutations/store;";
+			unit<uint32> FRAU_list:= 
+				='union_unit('+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_Rural_LAUs, create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_FUA_LAUS')+')',
+				descr = "Makes a list with LAU gisco IDs and accompanying codes (FUAs and FRAs)"
+			{
+				attribute<string> LAU_GISCO_ID:= ='union_data(., '+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_Rural_LAUs/GISCO_ID, create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_FUA_LAUS/GISCO_ID')+')';
+				attribute<string> FA_CODE:= ='union_data(., '+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_Rural_LAUs/FRA_code, create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_FUA_LAUS/FUA_code')+')';
+				parameter<string> store := 'LAU_GISCO_ID;FA_Code\n'+AsList(LAU_GISCO_ID+';'+FA_CODE, '\n')
+					,  StorageName = "= '%projdir%/process/curation1/LAUS_to_FRAUs_'+suffix+'.csv'"
+					,  StorageType = "str";
+			}
+			unit<uint32> FRAUs:= 
+				='union_unit('+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs')+')'
+				, descr = "combination of rural (non-FUA) LAUs into FRAUs"
+				, storagename = "= '%projdir%/process/curation1/fraus_'+suffix+'.shp'", storagetype = "gdalwrite.vect" {
+				attribute<LambertEA> Geometry (poly):= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/Geometry')+')';
+				attribute<string> 	 FRA_Code:= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/Values')+')';
+				attribute<string> 	 CNTR_CODE:= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/CNTR_CODE')+')';
+			}
+			
 		}
 	}
 	
@@ -159,21 +188,41 @@ container FRA_postprocessing {
 			attribute<LambertEA> Geometry (poly):= union_data(., Country_ff_main/Geometry, Country_ff_too_small/Geometry);
 			attribute<Country_ff_main> cff_rel:= union_data(., id(Country_ff_main), Country_ff_too_small/dest_main_ff);
 		}
-		
-		
-		/*unit<uint32> Country_sff:= select_with_attr_by_cond(split_fras_fuas, split_fras_fuas/Country = inCountry) {
-			attribute<.> 		grid_rel (popgrid_unit):= point_in_polygon(popgrid_unit/geometry, geometry);
-			attribute<uint32> 	neighbours:= pcount(sff_connectivity/first_rel) + pcount(sff_connectivity/second_rel);
-			attribute<bool> 	no_neighbours:= neighbours = 0;
-			attribute<bool>		fra_with_only_fua_neighbours:= !IsFUA && all(sff_connectivity/from_FUA, sff_connectivity/second_rel) && all(sff_connectivity/to_FUA, sff_connectivity/first_rel);
-			attribute<bool>		fua_with_only_fra_neighbours:= IsFUA && !any(sff_connectivity/from_FUA, sff_connectivity/second_rel) && !any(sff_connectivity/to_FUA, sff_connectivity/first_rel);
-		}
-		
-		unit<uint32> sff_connectivity:=  geos_polygon_connectivity(Country_sff/Geometry) {
-			attribute<bool> from_FUA:= Country_sff/IsFUA[first_rel];
-			attribute<bool> to_FUA:= Country_sff/IsFUA[second_rel];
-		}
-		*/
 	}
-
+	
+	Template T_Create_FRAUs {
+		parameter<string> inCountry;
+		parameter<string> in_FRAG_file;
+		
+		unit<uint32> in_frags: storagename = "= in_FRAG_file", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA";
+		
+		unit<uint32> Country_FRAGs:= select_with_attr_by_cond(in_frags, in_frags/Country = inCountry && !in_frags/FUA[bool]);
+		unit<uint32> Country_FUA_LAUS:= select_with_attr_by_cond(LAUs, LAUs/CNTR_CODE = inCountry && LAUs/inFUA) {
+			attribute<string> FUA_code:= FUAs/fua_id[FUA_rel];
+		}
+		unit<uint32> Country_Rural_LAUs:= select_with_attr_by_cond(LAUs, LAUs/CNTR_CODE = inCountry && !LAUs/inFUA) {
+			attribute<string> FRA_code:= Country_FRAGs/code[Intersection/biggest_FRA];
+			attribute<FRAUs>  FRAU_rel:= rlookup(FRA_code, FRAUS/values);
+		}
+		unit<uint32> FRAUs:= unique(Country_Rural_LAUs/FRA_code) {
+			attribute<LambertEA> Geometry (poly):= geos_union_polygon(Country_Rural_LAUs/Geometry, Country_Rural_LAUs/FRAU_rel);
+			attribute<string> 	 CNTR_CODE:= const(inCountry, ., string);
+		}
+		
+		unit<uint32> Intersection:= geos_overlay_polygon(Country_Rural_LAUs/geometry, Country_FRAGs/geometry), DialogData = "Geometry", DialogType = "map" {
+			attribute<float32> size:= float32(area(Geometry[LambertEA], float64));
+			attribute<uint32> n_fra 			(Country_Rural_LAUs):= pcount(first_rel);
+			attribute<uint32> n_lau 			(Country_FRAGs):= pcount(second_rel);
+			attribute<float64>	area:=				area(Geometry, float64) / (1000d * 1000d);
+			attribute<LambertEA> 	centroid:=			centroid_or_mid(Geometry);
+			attribute<.> 		biggest_rel 	(Country_Rural_LAUs):= 	max_index(size, first_rel);
+			//attribute<uint32>	fua				(LAURef):=  FRAsRef/fua[biggest_FRA];
+			attribute<Country_FRAGs> 	biggest_FRA (Country_Rural_LAUs):= 	second_rel[biggest_rel];
+			//attribute<float32> 	rel_size:= 		Country_Rural_LAUs / (size[biggest_rel])[first_rel];
+			//attribute<string>	ZoneId:=		LAURef/ZoneId[first_rel];
+			//attribute<FRAs_from_LAUs> ffl_id:=		rlookup(biggest_FRA[first_rel], FRAs_from_LAUs/Values);
+			//attribute<FRAs_from_LAUs> ffl_id_lau (LAURef):= rlookup(biggest_FRA, FRAs_from_LAUs/Values);
+		}
+	}
+	
 }
