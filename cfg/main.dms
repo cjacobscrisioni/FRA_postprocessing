@@ -1,10 +1,11 @@
 container FRA_postprocessing {
 		
 	parameter<uint32> init_code:= 500;
-	parameter<string> suffix:= '_x0';
+	parameter<string> suffix:= '_x1';
 	
-	parameter<float64> mainbody_minarea:= 2d;
-	parameter<uint32>  mainbody_minpop:= 1000;
+	parameter<float64> mainbody_minarea:= 2d, descr = "Minimum area by which a FRA is allowed to exist as a standalone area.";
+	parameter<uint32>  mainbody_minpop:= 1000, descr = "Minimum population by which a FRA is allowed to exist as a standalone area.";
+	parameter<float64> fua_island_max_area_dev:= 0.15d, descr = "Maximum deviation from mean FRA area to warrant that FUA island is added to a FUA.";
 	
 	/* ***********************
 		FRA coding system proposed by Chris Jacobs-Crisioni
@@ -16,28 +17,29 @@ container FRA_postprocessing {
 		R: for rural
 		
 		suffixes:
-		_x0: generated 26/11/2025, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 11 November 2025. Only light curation (step 1).
-		
+		_x0: generated 26/11/2025, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 11 November 2025. Only light curation (step 1). FRAUS have some manual edits to align with stopgap changes to FUAS (exclaves for the Marseille FUA)
+		_x1: generated 22/01/2026, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 14 January 2026. Light curation (step 1) and addition of FUA islands to FUAs.
 	
 	
 	*/
 	
 	unit<dpoint> LambertEA: 	Descr = "ETRS_1989_LAEA_52N_10E" // "coords from SW to NE";
 		,	SpatialReference = "EPSG:3035"; // EPSG code for Lamber EA
-	
-	unit<uint32> FRAs: storagename = "%projdir%/data/FRA_prototype_20251126/mozaik_.shp", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA" {
+	unit<ipoint> LambertEA_IP := gridset(LambertEA, point_xy(1d, 1d), point_xy(0d, 0d), ipoint);
+	unit<uint32> FRAs: storagename = "%projdir%/data/FRA_prototype_20260122/mozaik_.shp", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA" {
 		attribute<uint32> occurence:= cumulate(const(1,.,uint32), Country_rel);
 		attribute<Countries> Country_rel:= rlookup(MS, Countries/Values);
 		attribute<string> code:= MS+string(init_code+occurence)+'R'+suffix;
 		attribute<LambertEA> poly_from_grid (poly):= geos_union_polygon(popgrid_unit/geometry_poly, popgrid_unit/fra_rel2);
 	}
-	unit<uint32> FUAs: storagename = "%projdir%/data/FUAs_2021_20251126.shp", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA" {
+	unit<uint32> FUAs: storagename = "%projdir%/data/FUAs_B3_20260114.shp", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA" {
 		attribute<string> Country:= substr(fua_id, 0, 2);
 		attribute<string> Remaining_str:= substr(fua_id, 2, strlen(fua_id));
 		attribute<uint32> Number:= substr(fua_id, 2, strlen(fua_id)-3)[uint32];
 		attribute<LambertEA> poly_from_grid (poly):= geos_union_polygon(popgrid_unit/geometry_poly, popgrid_unit/fua_rel);
 	}
 	unit<uint32> LAUs: storagename = "%projdir%/data/LAU_RG_01M_2021_3035.gpkg", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA" {
+		attribute<.> 		 rel:= id(.);
 		attribute<LambertEA> centroid:= centroid_or_mid(geometry);
 		attribute<FUAs>		 FUA_rel:= point_in_polygon(centroid, FUAs/Geometry);
 		attribute<bool>		 inFUA:= isdefined(FUA_rel);
@@ -83,7 +85,7 @@ container FRA_postprocessing {
 	
 	unit<uint32> FRAs_and_FUAs:= union_unit(FRAs, FUAs), descr = "Combine FRAs and FUAs into one spatially non-overlapping, grid-based specification." {
 		attribute<.>		 all_ff_id:= id(.);
-		attribute<LambertEA> Store_Geometry (poly):= union_data(., FRAs/poly_from_grid, FUAs/poly_from_grid), storagename = "= '%projdir%/process/fras_fuas_'+suffix+'.fss'";
+		attribute<LambertEA> Store_Geometry (poly):= union_data(., FRAs/poly_from_grid, FUAs/poly_from_grid), storagename = "= '%projdir%/process/fras_fuas_'+suffix+'.fss'", descr = "Stores all geometries as grid-based";
 		attribute<LambertEA> Geometry (poly): storagename = "= propvalue(Store_Geometry, 'storagename')";
 		//attribute<LambertEA> Geometry (poly):= ='existingfile('+quote('XXXXX')+', '+quote(propvalue(Store_Geometry, 'storagename'))+') <> '+quote('XXXXX')+' ? Read_Geometry : Store_Geometry';
 		attribute<bool>	     IsFUA:= union_data(., const(FALSE, FRAs, bool), const(TRUE, FUAs, bool));
@@ -115,8 +117,7 @@ container FRA_postprocessing {
 		}
 		
 		container cleanup_per_country:= for_each_ne(Countries/Values, 'T_cleanup_per_country('+quote(Countries/Values)+')');
-		container create_FRAUs_from_FRAGs:= for_each_ne(Countries/Values, 'T_Create_FRAUs('+quote(Countries/Values)+','+quote(propvalue(export_curation_1/curated_step1_export, 'storagename'))+')');
-		
+	
 		container export_curation_1 {
 			unit<uint32> curated_step1_export:= ='union_unit('+asItemList('cleanup_per_country/'+Countries/Values+'/Country_ff_main')+')', storagename = "= '%projdir%/process/curation1/fras_fuas_'+suffix+'.shp'", storagetype = "gdalwrite.vect" {
 				attribute<LambertEA> Geometry (poly):= ='union_data(.,'+asItemList('cleanup_per_country/'+Countries/Values+'/Country_ff_main/Curated_Geometry_v1')+')';
@@ -124,13 +125,18 @@ container FRA_postprocessing {
 				attribute<string> 	 Code:= ='union_data(.,'+asItemList('cleanup_per_country/'+Countries/Values+'/Country_ff_main/Code')+')';
 				attribute<uint32> 	 FUA:= ='uint32(union_data(.,'+asItemList('cleanup_per_country/'+Countries/Values+'/Country_ff_main/IsFUA')+'))';
 			}
-			unit<uint32> curation_step1_mutations:= ='union_unit('+asitemlist('cleanup_per_country/'+Countries/Values+'/Country_ff_too_small')+')' {//, storagename = "= '%projdir%/process/curation1/mutations_'+suffix+'.csv'" {//, storagetype = "gdalwrite.vect" {
-				attribute<string> text:= ='union_data(.,'+asItemList('cleanup_per_country/'+Countries/Values+'/Country_ff_too_small/mutation_record')+')';
+			unit<uint32> curation_step1_mutations:= 
+				='union_unit('+asitemlist('cleanup_per_country/'+Countries/Values+'/Country_ff_too_small')+', '+asitemlist('cleanup_per_country/'+Countries/Values+'/FUA_islands')+')'
+			{//, storagename = "= '%projdir%/process/curation1/mutations_'+suffix+'.csv'" {//, storagetype = "gdalwrite.vect" {
+				attribute<string> text:= ='union_data(.,'+
+					asItemList('cleanup_per_country/'+Countries/Values+'/Country_ff_too_small/mutation_record')+', '+asItemList('cleanup_per_country/'+Countries/Values+'/FUA_islands/mutation_record')+')';
 				parameter<string> store := AsList(text, '\n')
 					,  StorageName = "= '%projdir%/process/curation1/mutations_'+suffix+'.csv'"
 					,  StorageType = "str";
 			}
 			parameter<bool> store_curation:= True, explicitsuppliers="curated_step1_export;curation_step1_mutations/store;";
+			
+			container create_FRAUs_from_FRAGs:= for_each_ne(Countries/Values, 'T_Create_FRAUs('+quote(Countries/Values)+','+quote(propvalue(export_curation_1/curated_step1_export, 'storagename'))+')');
 			unit<uint32> FRAU_list:= 
 				='union_unit('+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_Rural_LAUs, create_FRAUs_from_FRAGs/'+Countries/Values+'/Country_FUA_LAUS')+')',
 				descr = "Makes a list with LAU gisco IDs and accompanying codes (FUAs and FRAs)"
@@ -156,11 +162,43 @@ container FRA_postprocessing {
 	Template T_cleanup_per_country {
 		parameter<string> inCountry;
 		
-		unit<uint32> Country_ff_main:= select_with_attr_by_cond(FRAs_and_FUAs, FRAs_and_FUAs/Country = inCountry && FRAs_and_FUAs/mainbody), descr = "FRAs and FUAs that meet the mainbody criteria. The curated v1 geometry is unioned here." {
-			attribute<.> ff_rel (popgrid_unit):= rlookup(popgrid_unit/fra_fua_rel, all_ff_id);
-			attribute<LambertEA> Curated_Geometry_v1 (poly):= geos_union_polygon(all_ff/Geometry, all_ff/cff_rel);
-			unit<uint32> points := sequence2points(geometry);}
-		unit<uint32> Country_ff_too_small:= select_with_attr_by_cond(FRAs_and_FUAs, FRAs_and_FUAs/Country = inCountry && !FRAs_and_FUAs/mainbody) {
+		unit<uint32> Country_ff_main_with_FUA_islands:= select_with_attr_by_cond(FRAs_and_FUAs, FRAs_and_FUAs/Country = inCountry && FRAs_and_FUAs/mainbody), 
+			descr = "FRAs and FUAs that meet the mainbody criteria. Small separate units are merged into these. The mainbody criterion right now is Pop >= mainbody_minpop && Area_km2 >= mainbody_minarea. The curated v1 geometry is unioned here.
+			This section still includes the FUA islands.
+			" 
+		{
+			unit<uint32> contiguity_matrix:= geos_polygon_connectivity(geometry) {
+				attribute<bool> f_IsFUA:= IsFUA[first_rel];
+				attribute<bool> t_IsFUA:= IsFUA[second_rel];
+				attribute<float64> gravity_fFUA:= f_IsFUA[float64] * float64(pop[first_rel]) * makedefined(dist(centroid[first_rel], centroid[second_rel])^-2d, 0d);
+				attribute<float64> gravity_tFUA:= t_IsFUA[float64] * float64(pop[second_rel]) * makedefined(dist(centroid[first_rel], centroid[second_rel])^-2d, 0d);
+			}
+			attribute<uint32> f_neighs:= pcount(contiguity_matrix/first_rel);
+			attribute<uint32> t_neighs:= pcount(contiguity_matrix/second_rel);
+			attribute<uint32> n_neighs:= f_neighs + t_neighs;
+			attribute<bool>	  allf_isFua:= all(contiguity_matrix/f_IsFUA, contiguity_matrix/second_rel);
+			attribute<bool>	  allt_isFua:= all(contiguity_matrix/t_IsFUA, contiguity_matrix/first_rel);
+			attribute<bool>	  FUA_island:= n_neighs > 0 && allf_isFua && allt_isFua && !IsFUA;
+			attribute<float64>	  dev_area:= Area_km2 / (sum(Area_km2 * float64(!IsFua)) / sum(float64(!IsFua)));
+			attribute<bool>	  FUA_island_sel:= FUA_island && dev_area < fua_island_max_area_dev;
+			attribute<.>	  FUA_largest_pull:= max(contiguity_matrix/gravity_tFUA, contiguity_matrix/first_rel) > max(contiguity_matrix/gravity_fFUA, contiguity_matrix/second_rel) ? 
+				contiguity_matrix/second_rel[max_index(contiguity_matrix/gravity_tFUA, contiguity_matrix/first_rel)] : contiguity_matrix/first_rel[max_index(contiguity_matrix/gravity_fFUA, contiguity_matrix/second_rel)];
+		}
+		unit<uint32> FUA_islands:= select_with_org_rel(Country_ff_main_with_FUA_islands/FUA_island_sel),
+			descr = "FRAs that are islands within FUAs, and meet the fua_island_max_area_dev criterion."
+		{
+			attribute<LambertEA> Geometry (poly):= Country_ff_main_with_FUA_islands/Geometry[org_rel];
+			attribute<uint32>    Pop:= Country_ff_main_with_FUA_islands/Pop[org_rel];
+			attribute<string> 	 Code:= Country_ff_main_with_FUA_islands/Code[org_rel];
+			attribute<float64> 	 Area_km2:= Country_ff_main_with_FUA_islands/Area_km2[org_rel];
+			attribute<Country_ff_main_with_FUA_islands> join_to_org_rel:= Country_ff_main_with_FUA_islands/FUA_largest_pull[org_rel];
+			attribute<Country_ff_main>	dest_main_ff:= rlookup(join_to_org_rel, Country_ff_main/org_rel);
+			
+			attribute<string> mutation_record:= 'FRA '+code+' (pop: '+string(pop)+' area: '+string(Area_km2)+' km2) absorbed by '+(Country_ff_main/IsFUA[dest_main_ff] ? 'FUA' : 'FRA')+' '+Country_ff_main/code[dest_main_ff]+' based on FUA pull';
+		}
+		unit<uint32> Country_ff_too_small:= select_with_attr_by_cond(FRAs_and_FUAs, FRAs_and_FUAs/Country = inCountry && !FRAs_and_FUAs/mainbody),
+			descr = "FRAs and FUAs that do not meet the mainbody criterion. The mainbody criterion right now is Pop >= mainbody_minpop && Area_km2 >= mainbody_minarea"
+		{
 			//attribute<uint32> n_neighbours:= sum(contiguity_matrix/n, contiguity_matrix/first_rel);
 			attribute<uint32> n_neighbours:= sum(contiguity_matrix/n, contiguity_matrix/first_rel);
 			attribute<Country_ff_main> most_contiguous_neighbour:= n_neighbours > 0 ? contiguity_matrix/second_rel[max_index(contiguity_matrix/n, contiguity_matrix/first_rel)] : 0 / 0;
@@ -171,6 +209,7 @@ container FRA_postprocessing {
 			attribute<string> mutation_record:= 'FRA '+code+' (pop: '+string(pop)+' area: '+string(Area_km2)+' km2) absorbed by '+(Country_ff_main/IsFUA[dest_main_ff] ? 'FUA' : 'FRA')+' '+Country_ff_main/code[dest_main_ff]+' based on '+(isdefined(most_contiguous_neighbour) ? 'contiguity' : 'proximity');
 			
 			unit<uint32> points := sequence2points(geometry) {
+				attribute<LambertEA> Geometry:= point;
 				attribute<Country_ff_main> link := Country_ff_main/points/Sequence_rel[rlookup(point, Country_ff_main/points/point)];
 				attribute<upoint> uni_point:= point_xy(sequence_rel, link, upoint);
 				attribute<contiguity_matrix> cm_rel:= rlookup(uni_point, contiguity_matrix/uni_point);
@@ -180,13 +219,26 @@ container FRA_postprocessing {
 				attribute<uint32> n:= pcount(Country_ff_too_small/points/cm_rel);
 			}
 		}
+		unit<uint32> Country_ff_main:= 	select_with_org_rel(!Country_ff_main_with_FUA_islands/FUA_island_sel) 
+		{
+			attribute<LambertEA> Org_Geometry (poly):= Country_ff_main_with_FUA_islands/Geometry[org_rel];
+			attribute<FRAs_and_FUAs> all_ff_id:= Country_ff_main_with_FUA_islands/all_ff_id[org_rel];
+			attribute<LambertEA> Curated_Geometry_v1 (poly):= bp_union_polygon(all_ff/iGeom, all_ff/cff_rel)[LambertEA];
+			attribute<bool>	IsFUA:= Country_ff_main_with_FUA_islands/IsFUA[org_rel];
+			attribute<string> Country:= Country_ff_main_with_FUA_islands/Country[org_rel];
+			attribute<string> Code:= Country_ff_main_with_FUA_islands/Code[org_rel];
+			attribute<.> ff_rel (popgrid_unit):= rlookup(popgrid_unit/fra_fua_rel, all_ff_id);
+			
+			unit<uint32> points := sequence2points(Org_Geometry);
+		}
 		unit<uint32> gridpoints_in_country_ff:= select_with_org_rel(isdefined(Country_ff_main/ff_rel)) {
 			attribute<LambertEA> Geometry:= popgrid_unit/Geometry[org_rel];
 			attribute<Country_ff_main> ff_main_rel:= Country_ff_main/ff_rel[org_rel];
 		}
-		unit<uint32> all_ff:= union_unit(Country_ff_main, Country_ff_too_small) {
-			attribute<LambertEA> Geometry (poly):= union_data(., Country_ff_main/Geometry, Country_ff_too_small/Geometry);
-			attribute<Country_ff_main> cff_rel:= union_data(., id(Country_ff_main), Country_ff_too_small/dest_main_ff);
+		unit<uint32> all_ff:= union_unit(Country_ff_main, Country_ff_too_small, FUA_islands) {
+			attribute<LambertEA> Geometry (poly):= union_data(., Country_ff_main/Org_Geometry, Country_ff_too_small/Geometry, FUA_islands/Geometry);
+			attribute<LambertEA_IP> iGeom (poly):= Geometry[LambertEA_IP];
+			attribute<Country_ff_main> cff_rel:= union_data(., id(Country_ff_main), Country_ff_too_small/dest_main_ff, FUA_islands/dest_main_ff);
 		}
 	}
 	
@@ -196,12 +248,17 @@ container FRA_postprocessing {
 		
 		unit<uint32> in_frags: storagename = "= in_FRAG_file", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA";
 		
+		unit<uint32> inLAUS:= LAUs {
+			attribute<LAU_exception_list> lel_rel:= rlookup(GISCO_ID, LAU_exception_list/LAU_code);
+			attribute<bool> to_FRA:= LAU_exception_list/to_FRA[lel_rel];
+		}
+		
 		unit<uint32> Country_FRAGs:= select_with_attr_by_cond(in_frags, in_frags/Country = inCountry && !in_frags/FUA[bool]);
-		unit<uint32> Country_FUA_LAUS:= select_with_attr_by_cond(LAUs, LAUs/CNTR_CODE = inCountry && LAUs/inFUA) {
+		unit<uint32> Country_FUA_LAUS:= select_with_attr_by_cond(LAUs, LAUs/CNTR_CODE = inCountry && LAUs/inFUA && !inLAUs/to_FRA) {
 			attribute<string> FUA_code:= FUAs/fua_id[FUA_rel];
 		}
-		unit<uint32> Country_Rural_LAUs:= select_with_attr_by_cond(LAUs, LAUs/CNTR_CODE = inCountry && !LAUs/inFUA) {
-			attribute<string> FRA_code:= Country_FRAGs/code[Intersection/biggest_FRA];
+		unit<uint32> Country_Rural_LAUs:= select_with_attr_by_cond(LAUs, LAUs/CNTR_CODE = inCountry && (!LAUs/inFUA ||  inLAUs/to_FRA)) {
+			attribute<string> FRA_code:= makedefined(LAU_exception_list/FRA_code[inLAUs/lel_rel[rel]], Country_FRAGs/code[Intersection/biggest_FRA]);
 			attribute<FRAUs>  FRAU_rel:= rlookup(FRA_code, FRAUS/values);
 		}
 		unit<uint32> FRAUs:= unique(Country_Rural_LAUs/FRA_code) {
@@ -223,6 +280,20 @@ container FRA_postprocessing {
 			//attribute<FRAs_from_LAUs> ffl_id:=		rlookup(biggest_FRA[first_rel], FRAs_from_LAUs/Values);
 			//attribute<FRAs_from_LAUs> ffl_id_lau (LAURef):= rlookup(biggest_FRA, FRAs_from_LAUs/Values);
 		}
+		
+		/* temporary exception list to fix erroneous FUA split (version x0)
+		unit<uint32> LAU_exception_list: nrofrows = 8 {
+			attribute<string> LAU_code: ['FR_04118', 'FR_04137', 'FR_04154', 'FR_07187', 'FR_30242', 'FR_48036', 'FR_2B216', 'FR_2B030'];
+			attribute<string> FRA_code: ['FR749R_x0','FR749R_x0','FR662R_x0','FR610R_x0','FR618R_x0','FR604R_x0','FR673R_x0','FR674R_x0'];
+			attribute<bool>   to_FRA:= const(true, ., bool);
+			attribute<FRAUs>  FRAU_rel:= rlookup(FRA_code, FRAUS/values);
+		}*/
+		unit<uint32> LAU_exception_list: nrofrows = 0 {
+			attribute<string> LAU_code: [];
+			attribute<string> FRA_code: [];
+			attribute<bool>   to_FRA: [];
+			attribute<FRAUs>  FRAU_rel: [];
+		}
+		
 	}
-	
 }
