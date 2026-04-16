@@ -1,7 +1,8 @@
 container FRA_postprocessing {
 		
 	parameter<uint32> init_code:= 500;
-	parameter<string> suffix:= '_x2';
+	parameter<string> suffix:= '_x3';
+	parameter<string> frau_size_criterion:= 'pop';
 	
 	parameter<float64> mainbody_minarea:= 2d, descr = "Minimum area by which a FRA is allowed to exist as a standalone area.";
 	parameter<uint32>  mainbody_minpop:= 1000, descr = "Minimum population by which a FRA is allowed to exist as a standalone area.";
@@ -20,7 +21,8 @@ container FRA_postprocessing {
 		_x0: generated 26/11/2025, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 11 November 2025. Only light curation (step 1). FRAUS have some manual edits to align with stopgap changes to FUAS (exclaves for the Marseille FUA)
 		_x1: generated 22/01/2026, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 14 January 2026. Light curation (step 1) and addition of FUA islands to FUAs.
 		_X2: generated 02/02/2026, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 14 January 2026. Light curation (step 1) and addition of FUA islands to FUAs. Fixes to FRAUs, now based on highdetail version of LAUs and incorporating FUA territory.
-	
+		_x3: underway. Includes FUA fix for CB FUAs in Switzerland (depending on nuts0 field now). Also, test with FRAUs based on majority population rather than majority land.
+		
 	*/
 	
 	unit<dpoint> LambertEA: 	Descr = "ETRS_1989_LAEA_52N_10E" // "coords from SW to NE";
@@ -33,7 +35,8 @@ container FRA_postprocessing {
 		attribute<LambertEA> poly_from_grid (poly):= geos_union_polygon(popgrid_unit/geometry_poly, popgrid_unit/fra_rel2);
 	}
 	unit<uint32> FUAs: storagename = "%projdir%/data/FUAs_B3_20260114.shp", storagereadonly = "True", storagetype = "gdal.vect", dialogdata = "LambertEA" {
-		attribute<string> Country:= substr(fua_id, 0, 2);
+		//attribute<string> Country:= substr(fua_id, 0, 2);
+		attribute<string> Country:= trim(nuts0);
 		attribute<string> Remaining_str:= substr(fua_id, 2, strlen(fua_id));
 		attribute<uint32> Number:= substr(fua_id, 2, strlen(fua_id)-3)[uint32];
 		attribute<LambertEA> poly_from_grid (poly):= geos_union_polygon(popgrid_unit/geometry_poly, popgrid_unit/fua_rel);
@@ -151,11 +154,14 @@ container FRA_postprocessing {
 			unit<uint32> FRAUs:= 
 				='union_unit('+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs')+')'
 				, descr = "combination of rural (non-FUA) LAUs into FRAUs"
-				, storagename = "= '%projdir%/process/curation1/fraus_'+suffix+'.shp'", storagetype = "gdalwrite.vect" {
+				, storagename = "= '%projdir%/process/curation1/fraus_'+suffix+'_'+frau_size_criterion+'.shp'", storagetype = "gdalwrite.vect" {
 				attribute<LambertEA> Geometry (poly):= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/Geometry')+')';
 				attribute<string> 	 FA_Code:= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/Values')+')';
 				attribute<string> 	 CNTR_CODE:= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/CNTR_CODE')+')';
 				attribute<bool> 	 FUA:= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/FUA')+')';
+				attribute<uint32> 	 def_sens:= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/definition_sensitivity')+')';
+				attribute<float32> 	 area_dif:= ='union_data(.,'+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/FRAUs/area_dif')+')';
+				
 			}
 			
 		}
@@ -265,31 +271,59 @@ container FRA_postprocessing {
 			attribute<string> FRA_code:= makedefined(LAU_exception_list/FRA_code[inLAUs/lel_rel[rel]], Country_FRAGs_and_FUAs/code[Intersection/biggest_FRA]);
 			attribute<bool>   is_FUA:= bool(Country_FRAGs_and_FUAs/FUA[Intersection/biggest_FRA]);
 			attribute<FRAUs>  FRAU_rel:= rlookup(FRA_code, FRAUS/values);
+			attribute<string> FRA_code_area:= makedefined(LAU_exception_list/FRA_code[inLAUs/lel_rel[rel]], Country_FRAGs_and_FUAs/code[Intersection/biggest_FRA_area]);
+			attribute<string> FRA_code_pop:= makedefined(LAU_exception_list/FRA_code[inLAUs/lel_rel[rel]], Country_FRAGs_and_FUAs/code[Intersection/biggest_FRA_pop]);
+			attribute<bool>   pop_size_membership_discrepancy:= FRA_code_area <> FRA_code_pop;
+			attribute<float32>rel_pop:= float32(Intersection/pop[Intersection/biggest_rel]) / Intersection/spop;
+			attribute<float32>rel_area:= float32(Intersection/size[Intersection/biggest_rel]) / Intersection/sarea;
 		}
+		unit<uint32> definition_sensitive_frau_members:= select_with_org_rel(Country_Rural_LAUs/pop_size_membership_discrepancy) 
+		{
+			attribute<LambertEA> Geometry (poly):= org_rel->Geometry;
+			attribute<string> 	 code_pop:= org_rel->FRA_code_pop;
+			attribute<string>	 code_area:= org_rel->FRA_code_area;
+			attribute<float32> 	 rel_pop:= org_rel->rel_pop;
+			attribute<float32>   rel_area:= org_rel->rel_area;
+		}		
 		unit<uint32> LAUs_combined:= union_unit(Country_FUA_LAUS, Country_Rural_LAUs) {
 			attribute<string> GISCO_ID:= union_data(., Country_FUA_LAUS/GISCO_ID, Country_Rural_LAUs/GISCO_ID);
 			attribute<string> code:= union_data(., Country_FUA_LAUS/FUA_code, Country_Rural_LAUs/FRA_code);
 			attribute<LambertEA> Geometry (poly):= union_data(., Country_FUA_LAUS/Geometry, Country_Rural_LAUs/Geometry);
+			attribute<float32> area_km2:= area(Geometry, float64)[float32] / (1000f * 1000f);
 			attribute<FRAUs> FRAU_rel:= rlookup(code, FRAUs/Values);
 			attribute<bool> 	FUA:= union_data(., const(True,Country_FUA_LAUS,bool), Country_Rural_LAUs/is_FUA);
+			attribute<bool>		pop_size_membership_discrepancy:= union_data(., const(False,Country_FUA_LAUS,bool), Country_Rural_LAUs/pop_size_membership_discrepancy);
 		}
 		unit<uint32> FRAUs:= unique(LAUs_combined/code) {
 			attribute<LambertEA> Geometry (poly):= geos_union_polygon(LAUs_combined/Geometry, LAUs_combined/FRAU_rel);
 			attribute<string> 	 CNTR_CODE:= const(inCountry, ., string);
 			attribute<Country_FRAGs_and_FUAs> cff_rel:= rlookup(Values, Country_FRAGs_and_FUAs/code);
 			attribute<bool>		 FUA:= bool(Country_FRAGs_and_FUAs/FUA)[cff_rel];
+			attribute<uint32>	 definition_sensitivity:= sum(LAUs_combined/pop_size_membership_discrepancy[uint32], LAUs_combined/FRAU_rel);
+			attribute<float32>	 area_dif:= sum(float32(LAUs_combined/pop_size_membership_discrepancy) * LAUs_combined/area_km2, LAUs_combined/FRAU_rel);
 		}
+		
+		attribute<Intersection> Intersection_rel (popgrid):= point_in_polygon(popgrid/geometry, Intersection/Geometry);
 		
 		unit<uint32> Intersection:= geos_overlay_polygon(Country_Rural_LAUs/geometry, Country_FRAGs_and_FUAs/geometry), DialogData = "Geometry", DialogType = "map" {
 			attribute<float32> size:= float32(area(Geometry[LambertEA], float64));
+			attribute<uint32>  pop:= sum(popgrid/GridData, Intersection_rel);
 			attribute<uint32> n_fra 			(Country_Rural_LAUs):= pcount(first_rel);
 			attribute<uint32> n_lau 			(Country_FRAGs_and_FUAs):= pcount(second_rel);
-			attribute<uint32> fua 				(Country_Rural_LAUs):= bool(Country_FRAGs_and_FUAs/FUA[biggest_FRA]);
+			//attribute<uint32> fua 				(Country_Rural_LAUs):= bool(Country_FRAGs_and_FUAs/FUA[biggest_FRA]);
 			attribute<float64>	area:=				area(Geometry, float64) / (1000d * 1000d);
 			attribute<LambertEA> 	centroid:=			centroid_or_mid(Geometry);
-			attribute<.> 		biggest_rel 	(Country_Rural_LAUs):= 	max_index(size, first_rel);
+			attribute<.> 		biggest_rel_area 	(Country_Rural_LAUs):= 	max_index(size, first_rel);
+			attribute<.> 		biggest_rel_pop 	(Country_Rural_LAUs):= 	makedefined(max_index(pop, first_rel), biggest_rel_area);
+			attribute<.>		biggest_rel			(Country_Rural_LAUs):=  ='biggest_rel_'+/frau_size_criterion;
 			//attribute<uint32>	fua				(LAURef):=  FRAsRef/fua[biggest_FRA];
-			attribute<Country_FRAGs_and_FUAs> 	biggest_FRA (Country_Rural_LAUs):= 	second_rel[biggest_rel];
+			attribute<Country_FRAGs_and_FUAs> 	biggest_FRA 		(Country_Rural_LAUs):= 	second_rel[biggest_rel];
+			attribute<Country_FRAGs_and_FUAs> 	biggest_FRA_pop 	(Country_Rural_LAUs):= 	second_rel[biggest_rel_pop];
+			attribute<Country_FRAGs_and_FUAs> 	biggest_FRA_area 	(Country_Rural_LAUs):= 	second_rel[biggest_rel_area];
+			
+			attribute<float32> spop (Country_Rural_LAUs):= sum(pop[float32], first_rel);
+			attribute<float32> sarea(Country_Rural_LAUs):= sum(size[float32], first_rel);
+			
 			//attribute<float32> 	rel_size:= 		Country_Rural_LAUs / (size[biggest_rel])[first_rel];
 			//attribute<string>	ZoneId:=		LAURef/ZoneId[first_rel];
 			//attribute<FRAs_from_LAUs> ffl_id:=		rlookup(biggest_FRA[first_rel], FRAs_from_LAUs/Values);
