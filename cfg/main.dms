@@ -1,12 +1,13 @@
 container FRA_postprocessing {
 		
 	parameter<uint32> init_code:= 500;
-	parameter<string> suffix:= '_x3';
+	parameter<string> suffix:= '_x4';
 	parameter<string> frau_size_criterion:= 'pop';
 	
 	parameter<float64> mainbody_minarea:= 2d, descr = "Minimum area by which a FRA is allowed to exist as a standalone area.";
 	parameter<uint32>  mainbody_minpop:= 1000, descr = "Minimum population by which a FRA is allowed to exist as a standalone area.";
-	parameter<float64> fua_island_max_area_dev:= 0.15d, descr = "Maximum deviation from mean FRA area to warrant that FUA island is added to a FUA.";
+	parameter<float64> fua_island_max_area_dev:= -1.00d, descr = "Maximum deviation from mean FRA area to warrant that FUA island is added to a FUA.";
+	// fua_island_max_area_dev: set to 0.15 in versions _x0 - _x3, then -1 for _x4 (no more fua island pulling to FUAs)
 	
 	/* ***********************
 		FRA coding system proposed by Chris Jacobs-Crisioni
@@ -21,7 +22,8 @@ container FRA_postprocessing {
 		_x0: generated 26/11/2025, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 11 November 2025. Only light curation (step 1). FRAUS have some manual edits to align with stopgap changes to FUAS (exclaves for the Marseille FUA)
 		_x1: generated 22/01/2026, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 14 January 2026. Light curation (step 1) and addition of FUA islands to FUAs.
 		_X2: generated 02/02/2026, targets: 25k, 30 to 60 minutes, created with Ardeco adjusted population grids 2021, v5 settlements (15 minutes), 2021 FUAs from 14 January 2026. Light curation (step 1) and addition of FUA islands to FUAs. Fixes to FRAUs, now based on highdetail version of LAUs and incorporating FUA territory.
-		_x3: underway. Includes FUA fix for CB FUAs in Switzerland (depending on nuts0 field now). Also, test with FRAUs based on majority population rather than majority land.
+		_x3: generated ~20/4/2026. Includes FUA fix for CB FUAs in Switzerland (depending on nuts0 field now). Also, test with FRAUs based on majority population rather than majority land.
+		_x4: generated 04/05/2026. No adding of FRAGs to FUAs 
 		
 	*/
 	
@@ -147,7 +149,9 @@ container FRA_postprocessing {
 				attribute<string> LAU_GISCO_ID:= ='union_data(., '+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/LAUs_combined/GISCO_ID')+')';
 				attribute<string> FA_CODE:= ='union_data(., '+asitemlist('create_FRAUs_from_FRAGs/'+Countries/Values+'/LAUs_combined/code')+')';
 				attribute<string> FUA:= ='union_data(., '+asitemlist('string(create_FRAUs_from_FRAGs/'+Countries/Values+'/LAUs_combined/FUA)')+')';
-				parameter<string> store := 'LAU_GISCO_ID;FA_Code\n'+AsList(LAU_GISCO_ID+';'+FA_CODE+';'+FUA, '\n')
+				attribute<string> FUA_added:= ='union_data(., '+asitemlist('string(create_FRAUs_from_FRAGs/'+Countries/Values+'/LAUs_combined/FUA_added)')+')';
+				attribute<string> Pop:= ='union_data(., '+asitemlist('string(create_FRAUs_from_FRAGs/'+Countries/Values+'/LAUs_combined/Pop)')+')';
+				parameter<string> store := 'LAU_GISCO_ID;FA_Code;FUA;FUA_added;Pop\n'+AsList(LAU_GISCO_ID+';'+FA_CODE+';'+FUA+';'+FUA_added+';'+Pop, '\n')
 					,  StorageName = "= '%projdir%/process/curation1/LAUS_to_FRAUs_'+suffix+'.csv'"
 					,  StorageType = "str";
 			}
@@ -292,6 +296,8 @@ container FRA_postprocessing {
 			attribute<float32> area_km2:= area(Geometry, float64)[float32] / (1000f * 1000f);
 			attribute<FRAUs> FRAU_rel:= rlookup(code, FRAUs/Values);
 			attribute<bool> 	FUA:= union_data(., const(True,Country_FUA_LAUS,bool), Country_Rural_LAUs/is_FUA);
+			attribute<bool>		FUA_added:= union_data(., const(False,Country_FUA_LAUS,bool), Country_Rural_LAUs/is_FUA);
+			attribute<uint32>	pop:= union_data(., Country_FUA_LAUS/pop_2021[uint32], Country_Rural_LAUs/pop_2021[uint32]);
 			attribute<bool>		pop_size_membership_discrepancy:= union_data(., const(False,Country_FUA_LAUS,bool), Country_Rural_LAUs/pop_size_membership_discrepancy);
 		}
 		unit<uint32> FRAUs:= unique(LAUs_combined/code) {
