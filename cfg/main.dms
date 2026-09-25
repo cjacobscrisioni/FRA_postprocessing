@@ -1,7 +1,7 @@
 container FRA_postprocessing {
 		
 	parameter<uint32> init_code:= 500;
-	parameter<string> suffix:= '_x6';
+	parameter<string> suffix:= '_x7';
 	parameter<string> frau_size_criterion:= 'pop';
 	
 	parameter<float64> mainbody_minarea:= 2d, descr = "Minimum area by which a FRA is allowed to exist as a standalone area.";
@@ -29,6 +29,7 @@ container FRA_postprocessing {
 		_x4: generated 04/05/2026. No adding of FRAGs to FUAs 
 		_x5: generated 15/8/2026. Includes new catchments (topography aware), fixes for islands, additional criteria for FRAU generation. No adding of FRAGs to FUAs. Mainbody criteria substantially reduced, <10 pop, 2km2. Additional FRAU pass to ensure that exclaves are minimized
 		_x6: generated 27/8/2026. Includes new LAU files (GISCO 2024), excluding waterbodies in Switzerland (! 'CH_CH9')
+		_x7: generated 25/9/2026. Fix to ensure that exploded FRAUs are not added to FUAs.
 		
 	*/
 	
@@ -473,6 +474,7 @@ container FRA_postprocessing {
 			attribute<float32> popshare:= makedefined(pop[float32] / float32(FRAUs/pop)[polygon_rel], areashare);
 			attribute<bool> main:= max_index(popshare, polygon_rel)[polygon_rel] = id(.);
 			attribute<LambertEA> centroid:= centroid_or_mid(geometry);
+			attribute<bool> FUA:= FRAUs/FUA[polygon_rel];
 			attribute<Exploded_FRAU_connectivity> mindist_from_neighbour:= min_index(Exploded_FRAU_connectivity/dist, Exploded_FRAU_connectivity/first_rel);
 			attribute<Exploded_FRAU_connectivity> mindist_to_neighbour:= min_index(Exploded_FRAU_connectivity/dist, Exploded_FRAU_connectivity/second_rel);
 			attribute<.> closest_contiguous_neighbour:= makedefined(Exploded_FRAU_connectivity/dist[mindist_from_neighbour], 9999999999999f) < makedefined(Exploded_FRAU_connectivity/dist[mindist_to_neighbour], 9999999999999f) 
@@ -484,8 +486,11 @@ container FRA_postprocessing {
 		unit<uint32> Exploded_FRAU_connectivity:= geos_polygon_connectivity(FRAU_exploded/Geometry) {
 			attribute<bool> from_main:= FRAU_exploded/main[first_rel];
 			attribute<bool> to_main:= FRAU_exploded/main[second_rel];
+			attribute<bool> from_FUA:= FRAU_exploded/FUA[first_rel];
+			attribute<bool> to_FUA:= FRAU_exploded/FUA[second_rel];
 			attribute<bool> one_main:= from_main <> to_main;
-			attribute<float32> dist:= one_main ? dist(FRAU_exploded/centroid[first_rel], FRAU_exploded/centroid[second_rel])[float32] : 0f / 0f;
+			attribute<bool> no_FUA:= !from_FUA && !to_FUA;
+			attribute<float32> dist:= one_main && no_FUA ? dist(FRAU_exploded/centroid[first_rel], FRAU_exploded/centroid[second_rel])[float32] : 0f / 0f;
 			
 		}
 		unit<uint32> LAUs_adjusted_FRAUs_intersection:= geos_overlay_polygon(Country_Rural_LAUs/geometry, FRAUs/Adjusted_geometry_from_exploding) {
@@ -548,11 +553,12 @@ container FRA_postprocessing {
 			attribute<bool>   to_FRA:= const(true, ., bool);
 			attribute<FRAUs>  FRAU_rel:= rlookup(FRA_code, FRAUS/values);
 		}*/
-		unit<uint32> LAU_exception_list: nrofrows = 0 {
-			attribute<string> LAU_code: [];
-			attribute<string> FRA_code: [];
-			attribute<bool>   to_FRA: [];
-			attribute<FRAUs>  FRAU_rel: [];
+		unit<uint32> LAU_exception_list: nrofrows = 1 {
+			attribute<string> LAU_code: ['CZ_564133'];
+			attribute<string> FRA_code1: ['CZ007F'];
+			attribute<string> FRA_code:= FRA_code1+suffix;
+			attribute<bool>   to_FRA:= const(true, ., bool);
+			attribute<FRAUs>  FRAU_rel:= rlookup(FRA_code, FRAUS/values);
 		}
 		
 	}
